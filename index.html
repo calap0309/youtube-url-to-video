@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube URL → Video - 720p MP4 Downloader</title>
+  <meta name="description" content="Paste a YouTube URL and download the video as MP4 at 720p. Works on GitHub Pages.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>YouTube → Video</h1>
+    <p class="subtitle">Paste link · Get MP4 · 720p fixed</p>
+  </header>
+
+  <main class="app-main">
+    <div class="url-box" id="urlBox">
+      <div class="url-input-wrap">
+        <input
+          type="url"
+          id="urlInput"
+          placeholder="Paste YouTube URL here (youtube.com / youtu.be / shorts)"
+          autocomplete="off"
+          spellcheck="false"
+        >
+        <button id="pasteBtn" class="icon-btn" title="Paste from clipboard" aria-label="Paste">📋</button>
+        <button id="clearBtn" class="icon-btn hidden" title="Clear" aria-label="Clear">✕</button>
+      </div>
+      <div class="url-hint">Supports youtube.com/watch, youtu.be, shorts, music.youtube.com, embed</div>
+      <button id="convertBtn" class="btn btn-primary convert-btn">Preview Video</button>
+      <div class="badge-row">
+        <span class="badge">MP4</span>
+        <span class="badge badge-accent">720p</span>
+        <span class="badge">No login</span>
+        <span class="badge">GitHub Pages ready</span>
+      </div>
+    </div>
+
+    <div id="previewCard" class="preview-card hidden">
+      <img id="thumbImg" class="preview-thumb" alt="Video thumbnail" src="">
+      <div class="preview-body">
+        <div id="videoTitle" class="preview-title">Video title</div>
+        <div id="videoMeta" class="preview-meta">—</div>
+        <div class="preview-actions">
+          <button id="downloadBtn" class="btn btn-primary">⬇ Download MP4 (720p)</button>
+          <button id="openBtn" class="btn btn-secondary">Open on YouTube</button>
+        </div>
+        <div id="statusLine" class="status-line"></div>
+        <div id="progressWrap" class="progress-wrap hidden">
+          <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+          <span id="progressText" class="progress-text">Contacting extractor…</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="errorBox" class="error-box hidden"></div>
+
+    <details class="help-details">
+      <summary>How does 720p download work on GitHub Pages?</summary>
+      <p>
+        GitHub Pages is static — it can't run <code>yt-dlp</code>. This app calls the open-source
+        <a href="https://github.com/imput/cobalt" target="_blank" rel="noopener">Cobalt API</a>
+        directly from your browser (<code>api.cobalt.tools</code>). Your URL never touches our server.
+        If Cobalt is down, try again or use an alternate instance. For personal use only — respect YouTube's Terms and copyright.
+      </p>
+    </details>
+  </main>
+
+  <footer class="app-footer">
+    <p>For personal/educational use. Respect creators &amp; YouTube ToS.</p>
+    <p class="footer-links">
+      <a href="https://github.com/imput/cobalt" target="_blank" rel="noopener">Cobalt API</a> ·
+      <a href="#" id="howLink">Privacy: no URL stored</a>
+    </p>
+  </footer>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
