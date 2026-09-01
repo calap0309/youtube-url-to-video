@@ -372,63 +372,61 @@
     const filename = sanitizeFilename(currentTitle) + ".mp4";
     let downloadSuccess = false;
 
-    // 1. Try backend /api/download (Vercel proxy stays on same domain, no 0-byte cross-origin issue)
+    // 1. Try backend (Vercel/Render/VPS) — use JSON mode to avoid 0-byte cross-origin 302
     const isBackend = await checkBackend();
     if (isBackend) {
       try {
         showProgress("Resolving stream from server…", 40);
-        // Use backend proxy that stays on youtube-url-to-video.vercel.app with attachment header
-        const backendDownloadUrl = BACKEND_BASE + "/api/download?url=" + encodeURIComponent(currentUrl) + "&quality=720";
-        // Quick health check: try HEAD to see if backend can proxy (avoid 0-byte)
+        // Get direct muxed URL via backend JSON (stays same-origin, no 302, then fetch as blob)
+        const apiUrl = BACKEND_BASE + "/api/download?url=" + encodeURIComponent(currentUrl) + "&quality=720&json=1";
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 8000);
-        const headResp = await fetch(backendDownloadUrl, { method: "HEAD", signal: ctrl.signal }).catch(() => null);
+        const t = setTimeout(() => ctrl.abort(), 15000);
+        const resp = await fetch(apiUrl, { signal: ctrl.signal }).catch(() => null);
         clearTimeout(t);
-        if (headResp && headResp.ok) {
-          showProgress("Starting download…", 90);
-          setStatus("Download ready — starting…", "success");
-          await triggerDownload(backendDownloadUrl, filename);
-          showProgress("Done", 100);
-          setStatus("Download started: " + filename, "success");
-          showToast("Download started — check your downloads folder", "success");
-          showSuccess(
-            'Download started via server! If it did not start, <a href="' + backendDownloadUrl + '" target="_blank" rel="noopener" download="' + filename + '">click here to download directly</a>.'
-          );
-          downloadSuccess = true;
-          hideProgress();
-          isBusy = false;
-          downloadBtn.disabled = false;
-          convertBtn.disabled = false;
-          return;
-        }
-        // If HEAD failed, fall back to /api/url direct googlevideo (old path) as secondary
-        const apiUrl = BACKEND_BASE + "/api/url?url=" + encodeURIComponent(currentUrl) + "&quality=720";
-        const ctrl2 = new AbortController();
-        const t2 = setTimeout(() => ctrl2.abort(), 10000);
-        const resp = await fetch(apiUrl, { signal: ctrl2.signal }).catch(() => null);
-        clearTimeout(t2);
         if (resp && resp.ok) {
           const data = await resp.json().catch(() => null);
-          if (data && data.url) {
-            showProgress("Starting download…", 90);
-            setStatus("Download ready — starting…", "success");
-            await triggerDownload(data.url, filename);
-            showProgress("Done", 100);
-            setStatus("Download started: " + filename, "success");
-            showToast("Download started — check your downloads folder", "success");
-            showSuccess(
-              'Download started! If it did not start automatically, <a href="' + data.url + '" target="_blank" rel="noopener" download="' + filename + '">click here to download directly</a>.'
-            );
-            downloadSuccess = true;
-            hideProgress();
-            isBusy = false;
-            downloadBtn.disabled = false;
-            convertBtn.disabled = false;
-            return;
+          const directUrl = data && (data.url || data.directUrl);
+          if (directUrl && String(directUrl).startsWith("http")) {
+            showProgress("Downloading…", 60);
+            setStatus("Downloading 720p MP4…");
+            // Fetch direct URL as blob (same-origin blob, not 0-byte cross-origin)
+            try {
+              const blobResp = await fetch(directUrl);
+              if (!blobResp.ok) throw new Error(`direct ${blobResp.status}`);
+              const blob = await blobResp.blob();
+              if (blob.size === 0) throw new Error("empty blob");
+              const blobUrl = URL.createObjectURL(blob);
+              await triggerDownload(blobUrl, data.filename || filename);
+              setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+              showProgress("Done", 100);
+              setStatus("Download started: " + (data.filename || filename), "success");
+              showToast("Download complete — check downloads", "success");
+              showSuccess('Download via server complete! File: <code>' + (data.filename || filename) + '</code> (' + (blob.size/1024/1024).toFixed(1) + ' MB)');
+              downloadSuccess = true;
+              hideProgress();
+              isBusy = false;
+              downloadBtn.disabled = false;
+              convertBtn.disabled = false;
+              return;
+            } catch (blobErr) {
+              console.warn("[download] blob fetch failed, falling back to direct link", blobErr);
+              // Fallback to direct link via <a> (off-domain but better than 0-byte)
+              await triggerDownload(directUrl, data.filename || filename);
+              showProgress("Done", 100);
+              setStatus("Download started: " + (data.filename || filename), "success");
+              showToast("Download started — check downloads", "success");
+              showSuccess('Download started! If not, <a href="' + directUrl + '" target="_blank" rel="noopener">click here</a>.');
+              downloadSuccess = true;
+              hideProgress();
+              isBusy = false;
+              downloadBtn.disabled = false;
+              convertBtn.disabled = false;
+              return;
+            }
           }
         }
       } catch (e) {
-        console.warn("[download] backend proxy failed:", e);
+        console.warn("[download] backend json failed:", e);
       }
     }
 

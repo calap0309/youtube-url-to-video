@@ -32,26 +32,28 @@ module.exports = async (req, res) => {
     } catch (_) {}
   }
 
-  // 1. On Vercel, proxy muxed MP4 through same domain (no 302) to fix 0-byte download
-  // 302 to googlevideo loses Content-Disposition and download attribute cross-origin -> 0 byte
-  // So fetch direct URL server-side and pipe bytes through Vercel with attachment header
+  // 1. On Vercel, handle json=1 first (frontend blob mode) to avoid 0-byte cross-origin 302
+  // and proxy via same domain for non-json (stream)
   const isVercel = !!process.env.VERCEL;
+  const wantJson = req.query.json === "1" || req.headers.accept?.includes("application/json");
+  if (wantJson) {
+    try {
+      const muxedFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`;
+      const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",muxedFormat,url]);
+      const direct = stdout.trim().split("\n")[0];
+      if (direct && direct.startsWith("http")) return res.json({ ok: true, url: direct, filename });
+      return res.status(500).json({ ok: false, error: "No direct URL found" });
+    } catch (e) {
+      const msg = (e.stderr || e.message || "failed").toString().slice(0, 400);
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  }
   if (isVercel) {
     try {
       const muxedFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`;
-      const { stdout } = await runYtDlp([
-        "--get-url",
-        "--no-warnings",
-        "--no-check-certificates",
-        "-f", muxedFormat,
-        url,
-      ]);
+      const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",muxedFormat,url]);
       const direct = stdout.trim().split("\n")[0];
       if (direct && direct.startsWith("http")) {
-        if (req.query.json === "1" || req.headers.accept?.includes("application/json")) {
-          return res.json({ ok: true, url: direct, filename });
-        }
-        // Proxy bytes so download stays on youtube-url-to-video.vercel.app with correct filename, not 0 byte
         const upstream = await fetch(direct);
         if (!upstream.ok || !upstream.body) throw new Error(`upstream ${upstream.status}`);
         res.writeHead(200, {
@@ -71,7 +73,6 @@ module.exports = async (req, res) => {
       }
     } catch (e) {
       console.warn("[download] Vercel proxy failed, falling back to stream:", e.message);
-      // fall through to stream fallback below
     }
   }
 
