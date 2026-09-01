@@ -226,27 +226,12 @@
     previewCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
-  // --- Backend download helpers ---
+  // --- Backend download helpers (Option A: always stream on same domain, no googlevideo redirect) ---
 
   async function requestBackendDownload(url) {
-    // Option 1: try /api/url to get direct URL (no server bandwidth)
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 15000);
-      const resp = await fetch(BACKEND_BASE + "/api/url?url=" + encodeURIComponent(url), { signal: ctrl.signal });
-      clearTimeout(t);
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.url && String(data.url).startsWith("http")) {
-          return { url: data.url, filename: sanitizeFilename(currentTitle) + ".mp4", via: "backend-url" };
-        }
-      }
-    } catch (e) {
-      console.warn("[backend] /api/url failed", e);
-    }
-    // Option 2: use streaming endpoint directly - return its URL for <a href>
-    // Browser will download via server pipe (uses server bandwidth but reliable)
-    const streamUrl = BACKEND_BASE + "/api/download?url=" + encodeURIComponent(url) + "&quality=720";
+    // Option A: stream muxed 720p via same domain /api/download?stream=1 — stays on vercel.app, no off-domain 302
+    // Do NOT try /api/url (googlevideo) — that was the redirect that showed "another domain" error
+    const streamUrl = BACKEND_BASE + "/api/download?url=" + encodeURIComponent(url) + "&quality=720&stream=1";
     return { url: streamUrl, filename: sanitizeFilename(currentTitle) + ".mp4", via: "backend-stream" };
   }
 
