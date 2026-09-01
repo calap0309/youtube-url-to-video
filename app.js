@@ -256,7 +256,6 @@
     if (!resp.ok) throw new Error("Invidious error: " + resp.status);
     const data = await resp.json();
     const streams = Array.isArray(data.formatStreams) ? data.formatStreams : [];
-    if (!streams.length) throw new Error("No format streams available");
 
     // Prefer 720p mp4, then any 720p, then highest resolution mp4
     const stream720 = streams.find((s) => (s.qualityLabel || s.quality || "").includes("720") && (s.container === "mp4" || (s.type || "").includes("mp4")))
@@ -270,6 +269,18 @@
         filename: sanitizeFilename(data.title || currentTitle) + ".mp4",
       };
     }
+
+    const adaptive = Array.isArray(data.adaptiveFormats) ? data.adaptiveFormats : [];
+    const adaptiveVideo = adaptive.find((s) => (s.qualityLabel || s.quality || "").includes("720") && (s.container === "mp4" || (s.type || "").includes("mp4")))
+      || adaptive.find((s) => s.container === "mp4" || (s.type || "").includes("mp4"));
+
+    if (adaptiveVideo && adaptiveVideo.url) {
+      return {
+        url: adaptiveVideo.url,
+        filename: sanitizeFilename(data.title || currentTitle) + ".mp4",
+      };
+    }
+
     throw new Error("No compatible MP4 stream found");
   }
 
@@ -355,63 +366,71 @@
     downloadBtn.disabled = true;
     convertBtn.disabled = true;
     hideError();
-    showProgress("Contacting extractor (720p)…", 20);
+    showProgress("Resolving 720p stream…", 20);
     setStatus("Requesting 720p MP4…");
 
     const filename = sanitizeFilename(currentTitle) + ".mp4";
+    let downloadSuccess = false;
 
-    // 1. Try backend first (Vercel, Render, VPS, Localhost)
+    // 1. Try backend /api/url (Vercel, Render, VPS, Localhost)
     const isBackend = await checkBackend();
     if (isBackend) {
       try {
-        showProgress("Preparing download link…", 50);
-        const downloadUrl = BACKEND_BASE + "/api/download?url=" + encodeURIComponent(currentUrl) + "&quality=720&title=" + encodeURIComponent(currentTitle);
+        showProgress("Resolving stream from server…", 40);
+        const apiUrl = BACKEND_BASE + "/api/url?url=" + encodeURIComponent(currentUrl) + "&quality=720";
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 15000);
+        const resp = await fetch(apiUrl, { signal: ctrl.signal }).catch(() => null);
+        clearTimeout(t);
 
-        showProgress("Starting download…", 90);
-        setStatus("Download ready — starting…", "success");
+        if (resp && resp.ok) {
+          const data = await resp.json().catch(() => null);
+          if (data && data.ok && data.url) {
+            showProgress("Starting download…", 90);
+            setStatus("Download ready — starting…", "success");
 
-        await triggerDownload(downloadUrl, filename);
+            await triggerDownload(data.url, filename);
 
-        showProgress("Done", 100);
-        setStatus("Download started: " + filename, "success");
-        showToast("Download started — check your downloads folder", "success");
+            showProgress("Done", 100);
+            setStatus("Download started: " + filename, "success");
+            showToast("Download started — check your downloads folder", "success");
 
-        showSuccess(
-          'Download initiated! If it did not start automatically, <a href="' + downloadUrl + '" target="_blank" rel="noopener" download="' + filename + '">tap here to download directly</a>.'
-        );
+            showSuccess(
+              'Download started! If it did not start automatically, <a href="' + data.url + '" target="_blank" rel="noopener" download="' + filename + '">click here to download directly</a>.'
+            );
 
-        hideProgress();
-        isBusy = false;
-        downloadBtn.disabled = false;
-        convertBtn.disabled = false;
-        return;
+            downloadSuccess = true;
+            hideProgress();
+            isBusy = false;
+            downloadBtn.disabled = false;
+            convertBtn.disabled = false;
+            return;
+          }
+        }
       } catch (e) {
-        console.warn("[download] backend request failed, trying fallback extractors...", e);
-        setStatus("Trying fallback extractors…", "error");
-        await new Promise((r) => setTimeout(r, 200));
+        console.warn("[download] backend direct URL extraction failed:", e);
       }
     }
 
-    // 2. Fallback: Public Invidious & Cobalt instances
+    // 2. Fallback: Public Invidious & Cobalt extractors
     const videoId = extractVideoId(currentUrl);
-    let downloadSuccess = false;
 
     // A. Invidious format streams
-    if (videoId) {
+    if (videoId && !downloadSuccess) {
       for (let i = 0; i < INVIDIOUS_INSTANCES.length; i++) {
         const inst = INVIDIOUS_INSTANCES[i];
         try {
-          showProgress("Checking " + new URL(inst).hostname + "…", 40 + i * 10);
+          showProgress("Checking " + new URL(inst).hostname + "…", 45 + i * 10);
           const result = await requestInvidious(videoId, inst);
           if (result && result.url) {
             showProgress("Starting download…", 90);
-            setStatus("Got link — downloading…", "success");
+            setStatus("Got format — downloading…", "success");
             await triggerDownload(result.url, result.filename);
             showProgress("Done", 100);
             setStatus("Download started: " + result.filename, "success");
             showToast("Download started — check your downloads", "success");
             showSuccess(
-              'Download started via stream. If needed, <a href="' + result.url + '" target="_blank" rel="noopener" download="' + result.filename + '">tap here to download directly</a>.'
+              'Download started via stream. If needed, <a href="' + result.url + '" target="_blank" rel="noopener" download="' + result.filename + '">click here to download directly</a>.'
             );
             downloadSuccess = true;
             break;
@@ -449,13 +468,12 @@
     }
 
     if (!downloadSuccess) {
-      const cleanMsg = "Could not extract direct stream for this video.";
+      const cleanMsg = "Could not extract direct 720p stream for this video.";
       setStatus(cleanMsg, "error");
       showError(
         cleanMsg + '<br><br>' +
         '<strong>Troubleshooting:</strong><br>' +
         '• Check if the video is public (not private, age-restricted, or members-only)<br>' +
-        '• If deployed on Vercel/Render, ensure your server functions are running<br>' +
         '• Try opening on YouTube: <a href="' + currentUrl + '" target="_blank" rel="noopener">Watch Video</a>'
       );
       showToast("Download extractor failed", "error");
@@ -466,6 +484,7 @@
     downloadBtn.disabled = false;
     convertBtn.disabled = false;
   }
+
 
   async function handlePreview() {
     const raw = urlInput.value.trim();

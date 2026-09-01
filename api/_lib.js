@@ -26,13 +26,18 @@ function sanitizeFilename(name) {
     .slice(0, 80) || "video";
 }
 
-function testBin(binPath) {
+function getBinVersion(binPath) {
   try {
+
     const out = execFileSync(binPath, ["--version"], { timeout: 8000, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
-    return out.length > 0;
+    return out;
   } catch {
-    return false;
+    return "";
   }
+}
+
+function testBin(binPath) {
+  return getBinVersion(binPath).length > 0;
 }
 
 function downloadYtDlpDirect(targetPath) {
@@ -66,8 +71,9 @@ function downloadYtDlpDirect(targetPath) {
 }
 
 async function ensureYtDlp() {
-  if (cachedBin && (cachedBin === "yt-dlp" || fs.existsSync(cachedBin)) && testBin(cachedBin)) {
-    return cachedBin;
+  if (cachedBin && (cachedBin === "yt-dlp" || fs.existsSync(cachedBin))) {
+    const v = getBinVersion(cachedBin);
+    if (v && v >= "2025.01.01") return cachedBin;
   }
 
   const candidates = [
@@ -78,18 +84,28 @@ async function ensureYtDlp() {
     "yt-dlp",
   ].filter(Boolean);
 
+  let bestBin = null;
+  let bestVersion = "";
+
   for (const c of candidates) {
     if (c === "yt-dlp" || fs.existsSync(c)) {
-      if (testBin(c)) {
-        cachedBin = c;
-        return cachedBin;
+      const v = getBinVersion(c);
+      if (v) {
+        if (!bestBin || v > bestVersion) {
+          bestBin = c;
+          bestVersion = v;
+        }
+        if (v >= "2025.01.01") {
+          cachedBin = c;
+          return cachedBin;
+        }
       }
     }
   }
 
-  // Attempt to download to /tmp/yt-dlp (writable on Vercel / AWS Lambda / Linux)
+  // Attempt to download latest binary to /tmp/yt-dlp
   try {
-    console.log("[yt-dlp] binary not found, downloading to", TMP_BIN);
+    console.log("[yt-dlp] downloading latest binary to", TMP_BIN);
     try {
       const YTDlpWrap = require("yt-dlp-wrap-plus").default;
       await YTDlpWrap.downloadFromGithub(TMP_BIN);
@@ -99,10 +115,11 @@ async function ensureYtDlp() {
     }
 
     if (fs.existsSync(TMP_BIN)) {
-      fs.chmodSync(TMP_BIN, 0o755);
-      if (testBin(TMP_BIN)) {
+      try { fs.chmodSync(TMP_BIN, 0o755); } catch {}
+      const v = getBinVersion(TMP_BIN);
+      if (v) {
         cachedBin = TMP_BIN;
-        console.log("[yt-dlp] downloaded and verified at", TMP_BIN);
+        console.log("[yt-dlp] downloaded and verified at", TMP_BIN, "version:", v);
         return cachedBin;
       }
     }
@@ -110,8 +127,14 @@ async function ensureYtDlp() {
     console.warn("[yt-dlp] download failed:", e.message);
   }
 
+  if (bestBin) {
+    cachedBin = bestBin;
+    return cachedBin;
+  }
+
   return null;
 }
+
 
 function resolveBin() {
   if (cachedBin) return cachedBin;
