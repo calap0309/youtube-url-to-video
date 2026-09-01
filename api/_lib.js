@@ -157,8 +157,10 @@ async function runYtDlp(args, opts = {}) {
   if (!bin) {
     throw new Error("yt-dlp binary is not available");
   }
+  // yt-dlp 2026+ requires JS runtime for YouTube; Vercel has node, add automatically
+  const finalArgs = args.includes("--js-runtimes") ? args : ["--js-runtimes", "node", ...args];
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(bin, finalArgs, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     proc.stdout.on("data", (d) => { stdout += d.toString(); });

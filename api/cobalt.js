@@ -23,56 +23,78 @@ module.exports = async (req, res) => {
   const allowed = new Set(["360","480","720","1080","max"]);
   const q = allowed.has(quality) ? quality : "720";
 
-  // Try yt-dlp first (most reliable, stays on Vercel with --js-runtimes node)
+  // Try yt-dlp first (most reliable, stays on Vercel)
+  // Add android player_client to bypass YouTube bot detection on Vercel AWS IP
+  const baseArgs = ["--no-warnings","--no-check-certificates","--extractor-args","youtube:player_client=android,web"];
   const tryYtDlp = async () => {
     const formats = [
       `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`,
       `best[height<=${q}][ext=mp4]/best[height<=${q}]/best/best`,
+      `best[height<=720][ext=mp4]/best`,
       `best`,
+      `18/22/best`, // fallback for old muxed
     ];
     for (const fmt of formats) {
       try {
-        const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",fmt,url]);
+        const { stdout } = await runYtDlp([...baseArgs,"--get-url","-f",fmt,url]);
         const direct = stdout.trim().split("\n")[0];
         if (direct && direct.startsWith("http")) {
-          let filename = "video.mp4";
+          let filename = `video-${q}p.mp4`;
           try {
-            const { stdout: j } = await runYtDlp(["--dump-single-json","--no-warnings","--no-check-certificates","--no-playlist","--flat-playlist",url]);
+            const { stdout: j } = await runYtDlp([...baseArgs,"--dump-single-json","--no-playlist","--flat-playlist",url]);
             const data = JSON.parse(j);
             filename = sanitizeFilename(data.title || data.id || "video") + ".mp4";
           } catch {}
           return { url: direct, filename };
         }
       } catch (e) {
-        console.warn(`[cobalt] yt-dlp ${fmt} failed`, e.message?.slice(0,120));
+        console.warn(`[cobalt] yt-dlp ${fmt} failed`, (e.stderr||e.message||"").slice(0,180));
       }
     }
     return null;
   };
 
-  // Try Invidious fallback
+  // Try Invidious fallback (more instances, longer timeout for Vercel)
   const tryInvidious = async () => {
     const videoId = (url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&\/]+)/) || [])[1];
     if (!videoId) return null;
-    const instances = ["https://inv.tux.pizza","https://invidious.nerdvpn.de","https://invidious.drgns.space","https://yewtu.be"];
+    const instances = [
+      "https://inv.tux.pizza",
+      "https://invidious.nerdvpn.de",
+      "https://invidious.drgns.space",
+      "https://yewtu.be",
+      "https://invidious.protokolla.fi",
+      "https://inv.nadeko.net",
+    ];
     for (const inv of instances) {
       try {
-        const r = await fetch(`${inv}/api/v1/videos/${videoId}`, { signal: AbortSignal.timeout(8000) });
+        const r = await fetch(`${inv}/api/v1/videos/${videoId}`, { signal: AbortSignal.timeout(10000), headers: { "User-Agent": "Mozilla/5.0" } });
         if (!r.ok) continue;
         const j = await r.json();
         const streams = j.formatStreams || [];
-        const s = streams.find(x => (x.qualityLabel||"").includes(q) && x.container==="mp4") || streams.find(x=>x.container==="mp4") || streams[0];
+        // Try 720p mp4, then any mp4, then any stream
+        let s = streams.find(x => (x.qualityLabel||x.quality||"").includes(q) && (x.container==="mp4"||x.type?.includes("mp4"))) 
+          || streams.find(x => (x.qualityLabel||x.quality||"").includes(q))
+          || streams.find(x=>x.container==="mp4"||x.type?.includes("mp4")) || streams[0];
         if (s && s.url) return { url: s.url, filename: sanitizeFilename(j.title || "video") + ".mp4" };
-      } catch {}
+        const adaptive = j.adaptiveFormats || [];
+        s = adaptive.find(x => (x.qualityLabel||"").includes(q) && x.container==="mp4") || adaptive.find(x=>x.container==="mp4");
+        if (s && s.url) return { url: s.url, filename: sanitizeFilename(j.title || "video") + ".mp4" };
+      } catch (e) {
+        console.warn(`[cobalt] inv ${inv} failed`, e.message?.slice(0,80));
+      }
     }
     return null;
   };
 
   let result = await tryYtDlp();
-  if (!result) result = await tryInvidious();
+  if (!result) {
+    console.log(`[cobalt] yt-dlp failed for ${q}p, trying Invidious`);
+    result = await tryInvidious();
+  }
   if (result && result.url) {
-    // Return tunnel so frontend's triggerDownload works same as before
     return res.json({ status: "tunnel", url: result.url, filename: result.filename });
   }
-  return res.status(500).json({ status: "error", error: { code: "error.api.youtube.noVideoInfo", message: "Could not extract 720p stream" } });
+  // Provide helpful error with hint
+  return res.status(500).json({ status: "error", error: { code: "error.api.youtube.noVideoInfo", message: `Could not extract ${q}p stream. Try 360p or check if video is public/age-restricted.` } });
 };
