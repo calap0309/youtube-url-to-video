@@ -1,0 +1,20 @@
+{
+  "name": "youtube-url-to-video",
+  "version": "1.0.0",
+  "description": "YouTube URL → 720p MP4 converter with Node backend (yt-dlp) + static frontend, single domain VPS deploy",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "postinstall": "node scripts/install-binaries.js || true"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "yt-dlp-wrap-plus": "^2.5.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

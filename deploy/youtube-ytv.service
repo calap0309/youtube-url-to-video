@@ -1,0 +1,19 @@
+[Unit]
+Description=YouTube URL to Video - Node backend
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/youtube-url-to-video
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+# Load from /opt/youtube-url-to-video/.env if present
+EnvironmentFile=-/opt/youtube-url-to-video/.env
+
+[Install]
+WantedBy=multi-user.target

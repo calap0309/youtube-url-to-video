@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YouTube URL → Video - 720p MP4 Downloader</title>
-  <meta name="description" content="Paste a YouTube URL and download the video as MP4 at 720p. Works on GitHub Pages.">
+  <meta name="description" content="Paste a YouTube URL and download the video as MP4 at 720p. VPS backend with single domain + GitHub Pages fallback.">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -32,7 +32,7 @@
         <span class="badge">MP4</span>
         <span class="badge badge-accent">720p</span>
         <span class="badge">No login</span>
-        <span class="badge">GitHub Pages ready</span>
+        <span id="backendBadge" class="badge">Checking server…</span>
       </div>
     </div>
 
@@ -56,12 +56,14 @@
     <div id="errorBox" class="error-box hidden"></div>
 
     <details class="help-details">
-      <summary>How does 720p download work on GitHub Pages?</summary>
+      <summary>How does 720p download work?</summary>
       <p>
-        GitHub Pages is static — it can't run <code>yt-dlp</code>. This app calls the open-source
+        <strong>With your domain (VPS):</strong> <code>yourdomain.com</code> runs Node + <code>yt-dlp</code> + <code>ffmpeg</code>.
+        The browser calls <code>/api/info</code> and <code>/api/download?quality=720</code> on the same domain — single domain, no CORS.
+        <br><br>
+        <strong>Fallback (GitHub Pages):</strong> if the backend is unreachable, the app calls the open-source
         <a href="https://github.com/imput/cobalt" target="_blank" rel="noopener">Cobalt API</a>
-        directly from your browser (<code>api.cobalt.tools</code>). Your URL never touches our server.
-        If Cobalt is down, try again or use an alternate instance. For personal use only — respect YouTube's Terms and copyright.
+        (<code>api.cobalt.tools</code>) directly from your browser. For personal use only — respect YouTube's Terms and copyright.
       </p>
     </details>
   </main>

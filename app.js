@@ -20,11 +20,13 @@
   const errorBox = $("#errorBox");
   const toastEl = $("#toast");
 
-  // Cobalt instances - try in order (same API, different domains)
+  // Backend (same domain, VPS) + Cobalt fallback (github.io / when backend down)
+  const BACKEND_BASE = ""; // same origin: /api/* (VPS: https://yourdomain.com/api/*)
   const COBALT_INSTANCES = [
     "https://api.cobalt.tools",
     "https://co.wuk.sh",
   ];
+  let backendAvailable = null; // null=unknown, true/false cached
 
   let currentUrl = "";
   let currentTitle = "video";
@@ -122,7 +124,28 @@
     return name.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80) || "video";
   }
 
-  // --- preview via oEmbed + thumbnail fallback ---
+  // --- backend detection ---
+  async function checkBackend() {
+    if (backendAvailable !== null) return backendAvailable;
+    // Don't try backend on file:// or if we already know it's github.io static without /api
+    if (location.protocol === "file:") {
+      backendAvailable = false;
+      return false;
+    }
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 2500);
+      const resp = await fetch(BACKEND_BASE + "/api/health", { signal: ctrl.signal });
+      clearTimeout(t);
+      backendAvailable = resp.ok;
+      return backendAvailable;
+    } catch {
+      backendAvailable = false;
+      return false;
+    }
+  }
+
+  // --- preview via backend /api/info -> oEmbed fallback ---
 
   async function fetchPreview(url) {
     const videoId = extractVideoId(url);
@@ -130,7 +153,28 @@
       ? "https://img.youtube.com/vi/" + videoId + "/hqdefault.jpg"
       : "";
 
-    // Try oEmbed first (no key, CORS allowed)
+    // 1. Try backend /api/info (VPS) - has real title/thumbnail/duration
+    if (await checkBackend()) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 8000);
+        const resp = await fetch(BACKEND_BASE + "/api/info?url=" + encodeURIComponent(url), { signal: ctrl.signal });
+        clearTimeout(t);
+        if (resp.ok) {
+          const data = await resp.json();
+          return {
+            title: data.title || "YouTube Video",
+            author: data.author || "",
+            thumb: data.thumbnail || thumbFallback,
+          };
+        }
+      } catch (e) {
+        // fall through to oEmbed
+        console.warn("[preview] backend failed, falling back to oEmbed", e);
+      }
+    }
+
+    // 2. Try oEmbed (no key, CORS allowed) - works on github.io
     try {
       const oembedUrl = "https://www.youtube.com/oembed?url=" + encodeURIComponent(url) + "&format=json";
       const ctrl = new AbortController();
@@ -171,6 +215,30 @@
     openBtn.onclick = () => window.open(url, "_blank", "noopener");
     // scroll into view on mobile
     previewCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  // --- Backend download helpers ---
+
+  async function requestBackendDownload(url) {
+    // Option 1: try /api/url to get direct URL (no server bandwidth)
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 15000);
+      const resp = await fetch(BACKEND_BASE + "/api/url?url=" + encodeURIComponent(url), { signal: ctrl.signal });
+      clearTimeout(t);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.url && String(data.url).startsWith("http")) {
+          return { url: data.url, filename: sanitizeFilename(currentTitle) + ".mp4", via: "backend-url" };
+        }
+      }
+    } catch (e) {
+      console.warn("[backend] /api/url failed", e);
+    }
+    // Option 2: use streaming endpoint directly - return its URL for <a href>
+    // Browser will download via server pipe (uses server bandwidth but reliable)
+    const streamUrl = BACKEND_BASE + "/api/download?url=" + encodeURIComponent(url) + "&quality=720";
+    return { url: streamUrl, filename: sanitizeFilename(currentTitle) + ".mp4", via: "backend-stream" };
   }
 
   // --- Cobalt download ---
@@ -290,6 +358,38 @@
     showProgress("Contacting extractor (720p)…", 20);
     setStatus("Requesting 720p MP4…");
 
+    // 1. Try backend first (VPS, single domain) - preferred when available
+    if (await checkBackend()) {
+      try {
+        showProgress("Using your server (720p)…", 40);
+        const result = await requestBackendDownload(currentUrl);
+        showProgress("Got link — starting download…", 90);
+        setStatus("Got link — downloading…", "success");
+        await triggerDownload(result.url, result.filename);
+        showProgress("Done", 100);
+        setStatus("Download started via backend: " + result.filename, "success");
+        showToast("Download started — check your downloads folder", "success");
+        showError(
+          'Via your domain (' + result.via + '). If download didn’t start, <a href="' + result.url + '" target="_blank" rel="noopener">tap here to open direct link</a>.'
+        );
+        errorBox.classList.remove("hidden");
+        errorBox.style.background = "#1a2e1a";
+        errorBox.style.borderColor = "#2e7d5b";
+        errorBox.style.color = "#bff5dd";
+        hideProgress();
+        isBusy = false;
+        downloadBtn.disabled = false;
+        convertBtn.disabled = false;
+        return;
+      } catch (e) {
+        console.warn("[download] backend failed, falling back to Cobalt", e);
+        setStatus("Backend failed, trying Cobalt…", "error");
+        await new Promise((r) => setTimeout(r, 300));
+        // fall through to Cobalt
+      }
+    }
+
+    // 2. Fallback: Cobalt (github.io / backend down)
     let lastErr = null;
     for (let i = 0; i < COBALT_INSTANCES.length; i++) {
       const inst = COBALT_INSTANCES[i];
@@ -448,6 +548,23 @@
     }
   })();
 
+  // Backend badge + expose
+  (function updateBackendBadge() {
+    const badge = document.getElementById("backendBadge");
+    if (!badge) return;
+    checkBackend().then((ok) => {
+      if (ok) {
+        badge.textContent = "✓ Your server";
+        badge.className = "badge badge-accent";
+        badge.title = "Backend /api reachable on this domain";
+      } else {
+        badge.textContent = "Cobalt fallback";
+        badge.className = "badge";
+        badge.title = "Backend not found — using Cobalt API (github.io mode)";
+      }
+    });
+  })();
+
   // expose for tests / console
-  window.__ytv = { isYouTubeUrl, extractVideoId, normalizeUrl, sanitizeFilename };
+  window.__ytv = { isYouTubeUrl, extractVideoId, normalizeUrl, sanitizeFilename, checkBackend };
 })();
