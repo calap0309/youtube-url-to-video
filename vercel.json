@@ -8,5 +8,7 @@
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/:path*" },
     { "source": "/(.*)", "destination": "/$1" }
-  ]
+  ],
+  "outputDirectory": ".",
+  "includeFiles": "yt-dlp"
 }

@@ -5,6 +5,15 @@ const path = require("path");
 
 let YTDLP_BIN = process.env.YTDLP_BIN || "yt-dlp";
 const TMP_BIN = "/tmp/yt-dlp";
+const BUNDLED_BIN = path.join(process.cwd(), "yt-dlp");
+const ALT_BUNDLED = path.join(__dirname, "..", "yt-dlp");
+
+function resolveBin() {
+  if (fs.existsSync(TMP_BIN)) return TMP_BIN;
+  if (fs.existsSync(BUNDLED_BIN)) return BUNDLED_BIN;
+  if (fs.existsSync(ALT_BUNDLED)) return ALT_BUNDLED;
+  return YTDLP_BIN;
+}
 
 function isYouTubeUrl(url) {
   try {
@@ -26,7 +35,7 @@ function sanitizeFilename(name) {
 }
 
 function runYtDlp(args) {
-  const bin = fs.existsSync(TMP_BIN) ? TMP_BIN : YTDLP_BIN;
+  const bin = resolveBin();
   return new Promise((resolve, reject) => {
     const proc = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -52,9 +61,11 @@ function runYtDlp(args) {
 
 async function ensureYtDlp() {
   if (fs.existsSync(TMP_BIN)) return TMP_BIN;
+  if (fs.existsSync(BUNDLED_BIN)) return BUNDLED_BIN;
+  if (fs.existsSync(ALT_BUNDLED)) return ALT_BUNDLED;
   try {
     await runYtDlp(["--version"]);
-    return YTDLP_BIN;
+    return resolveBin();
   } catch {
     // Try to download to /tmp (Vercel writable)
     try {
