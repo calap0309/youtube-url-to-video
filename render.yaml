@@ -1,0 +1,21 @@
+# Render Blueprint for ezconverter - single domain (frontend + /api)
+# Docs: https://render.com/docs/blueprint-spec
+# Push this file to GitHub, then Render Dashboard -> New -> Blueprint -> select repo -> Apply
+# Free plan: spins down after 15m idle (first request wakes ~30s). Keep warm via cron if needed.
+
+services:
+  - type: web
+    name: ezconverter
+    env: docker
+    dockerfilePath: ./Dockerfile
+    # If ezconverter is taken, Render will suffix (ezconverter-xxxx). Rename here if needed: ezconverter-yt
+    plan: free
+    region: singapore
+    # Render injects PORT=10000 automatically; our server respects process.env.PORT
+    # health check avoids cold-start false fails
+    healthCheckPath: /api/health
+    autoDeploy: true
+    # optional env vars
+    # envVars:
+    #   - key: NODE_ENV
+    #     value: production
