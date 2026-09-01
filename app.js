@@ -26,11 +26,12 @@
     "https://inv.tux.pizza",
     "https://invidious.nerdvpn.de",
     "https://invidious.drgns.space",
-    "https://invidious.projectsegfau.lt",
+    "https://yewtu.be",
   ];
+  // Self-hosted Cobalt on Vercel (no JWT, no Turnstile) + public fallbacks
   const COBALT_INSTANCES = [
-    "https://cobalt-api.kwiatekm.tokyo",
-    "https://api.cobalt.tools",
+    "/api/cobalt",
+    "https://co.wuk.sh",
   ];
 
   let backendAvailable = null; // null=unknown, true/false cached
@@ -284,9 +285,10 @@
     throw new Error("No compatible MP4 stream found");
   }
 
-  // --- Cobalt fallback extractor ---
+  // --- Cobalt fallback extractor (supports self-hosted /api/cobalt and public instances) ---
   async function requestCobalt(url, instanceBase) {
-    const endpoint = instanceBase.replace(/\/$/, "") + "/";
+    const isSelfHosted = instanceBase.startsWith("/");
+    const endpoint = isSelfHosted ? instanceBase : instanceBase.replace(/\/$/, "") + "/";
     const payload = {
       url: url,
       videoQuality: "720",
