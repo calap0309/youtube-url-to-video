@@ -32,27 +32,43 @@ module.exports = async (req, res) => {
     } catch (_) {}
   }
 
-  // 1. On Vercel, handle json=1 first (frontend blob mode) to avoid 0-byte cross-origin 302
-  // and proxy via same domain for non-json (stream)
-  const isVercel = !!process.env.VERCEL;
+  // 1. Vercel: handle json=1 and proxy with most permissive format to avoid 0-byte
   const wantJson = req.query.json === "1" || req.headers.accept?.includes("application/json");
+  const muxedFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`;
+  const permissiveFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best/best`;
   if (wantJson) {
     try {
-      const muxedFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`;
-      const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",muxedFormat,url]);
-      const direct = stdout.trim().split("\n")[0];
+      // Try muxed first, then permissive best
+      let direct = "";
+      try {
+        const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",muxedFormat,url]);
+        direct = stdout.trim().split("\n")[0];
+      } catch (e) {
+        console.warn("[download] muxed get-url failed, trying permissive", e.message);
+      }
+      if (!direct || !direct.startsWith("http")) {
+        const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",permissiveFormat,url]);
+        direct = stdout.trim().split("\n")[0];
+      }
       if (direct && direct.startsWith("http")) return res.json({ ok: true, url: direct, filename });
-      return res.status(500).json({ ok: false, error: "No direct URL found" });
+      return res.status(500).json({ ok: false, error: "No direct URL found (format not available)" });
     } catch (e) {
-      const msg = (e.stderr || e.message || "failed").toString().slice(0, 400);
+      const msg = (e.stderr || e.message || "failed").toString().slice(0, 600);
       return res.status(500).json({ ok: false, error: msg });
     }
   }
+  const isVercel = !!process.env.VERCEL;
   if (isVercel) {
     try {
-      const muxedFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`;
-      const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",muxedFormat,url]);
-      const direct = stdout.trim().split("\n")[0];
+      let direct = "";
+      try {
+        const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",muxedFormat,url]);
+        direct = stdout.trim().split("\n")[0];
+      } catch {}
+      if (!direct || !direct.startsWith("http")) {
+        const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",permissiveFormat,url]);
+        direct = stdout.trim().split("\n")[0];
+      }
       if (direct && direct.startsWith("http")) {
         const upstream = await fetch(direct);
         if (!upstream.ok || !upstream.body) throw new Error(`upstream ${upstream.status}`);
