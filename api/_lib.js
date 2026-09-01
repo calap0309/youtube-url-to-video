@@ -5,13 +5,11 @@ const path = require("path");
 
 let YTDLP_BIN = process.env.YTDLP_BIN || "yt-dlp";
 const TMP_BIN = "/tmp/yt-dlp";
-const BUNDLED_BIN = path.join(process.cwd(), "yt-dlp");
-const ALT_BUNDLED = path.join(__dirname, "..", "yt-dlp");
 
 function resolveBin() {
   if (fs.existsSync(TMP_BIN)) return TMP_BIN;
-  if (fs.existsSync(BUNDLED_BIN)) return BUNDLED_BIN;
-  if (fs.existsSync(ALT_BUNDLED)) return ALT_BUNDLED;
+  if (fs.existsSync(path.join(process.cwd(), "yt-dlp"))) return path.join(process.cwd(), "yt-dlp");
+  if (fs.existsSync(path.join(__dirname, "..", "yt-dlp"))) return path.join(__dirname, "..", "yt-dlp");
   return YTDLP_BIN;
 }
 

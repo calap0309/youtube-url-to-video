@@ -42,7 +42,17 @@ module.exports = async (req, res) => {
     if (/Private video/i.test(msg)) return res.status(403).json({ error: "Private video" });
     if (/Sign in/i.test(msg) || /login/i.test(msg)) return res.status(403).json({ error: "Video requires login / age verification" });
     if (/Video unavailable/i.test(msg)) return res.status(404).json({ error: "Video unavailable" });
-    if (/not found|ENOENT/i.test(msg)) return res.status(500).json({ error: "yt-dlp binary not found. Vercel cold start may need retry or use Cobalt fallback." });
+    // Vercel serverless has no python3/yt-dlp — don't 500, let frontend fallback to oEmbed/thumbnail + Cobalt
+    if (/python3|not found|ENOENT|No such file/i.test(msg)) {
+      // Return 503 so frontend knows to fallback gracefully, with thumbnail fallback data
+      let fallbackThumb = "";
+      try {
+        const idMatch = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&\/]+)/);
+        const vid = idMatch ? idMatch[1] : "";
+        if (vid) fallbackThumb = `https://img.youtube.com/vi/${vid}/hqdefault.jpg`;
+      } catch {}
+      return res.status(503).json({ error: "Backend extractor not available on Vercel (use Cobalt fallback)", fallbackThumb, useFallback: true });
+    }
     return res.status(500).json({ error: msg });
   }
 };

@@ -127,7 +127,6 @@
   // --- backend detection ---
   async function checkBackend() {
     if (backendAvailable !== null) return backendAvailable;
-    // Don't try backend on file:// or if we already know it's github.io static without /api
     if (location.protocol === "file:") {
       backendAvailable = false;
       return false;
@@ -137,8 +136,18 @@
       const t = setTimeout(() => ctrl.abort(), 2500);
       const resp = await fetch(BACKEND_BASE + "/api/health", { signal: ctrl.signal });
       clearTimeout(t);
-      backendAvailable = resp.ok;
-      return backendAvailable;
+      if (!resp.ok) {
+        backendAvailable = false;
+        return false;
+      }
+      const data = await resp.json().catch(() => ({}));
+      // Vercel has no python3/yt-dlp — treat as not available so we fallback to Cobalt quickly
+      if (data.hasYtDlp === false) {
+        backendAvailable = false;
+        return false;
+      }
+      backendAvailable = true;
+      return true;
     } catch {
       backendAvailable = false;
       return false;
