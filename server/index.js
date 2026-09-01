@@ -60,8 +60,10 @@ function sanitizeFilename(name) {
 }
 
 function runYtDlp(args, opts = {}) {
+  const hasJsRuntime = args.includes("--js-runtimes");
+  const finalArgs = hasJsRuntime ? args : ["--js-runtimes", "node", ...args];
   return new Promise((resolve, reject) => {
-    const proc = spawn(YTDLP_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(YTDLP_BIN, finalArgs, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     proc.stdout.on("data", (d) => { stdout += d.toString(); });
@@ -89,7 +91,9 @@ function runYtDlp(args, opts = {}) {
 }
 
 function spawnYtDlpStream(args) {
-  const proc = spawn(YTDLP_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
+  const hasJsRuntime = args.includes("--js-runtimes");
+  const finalArgs = hasJsRuntime ? args : ["--js-runtimes", "node", ...args];
+  const proc = spawn(YTDLP_BIN, finalArgs, { stdio: ["ignore", "pipe", "pipe"] });
   return proc;
 }
 
