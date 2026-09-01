@@ -92,13 +92,12 @@ module.exports = async (req, res) => {
     }
   }
 
-  // 2. Stream muxed MP4 on persistent server
+  // 2. Stream muxed MP4 on persistent server (reuse muxedFormat/permissiveFormat)
   const bin = await ensureYtDlp();
   if (!bin) {
     return res.status(503).json({ ok: false, error: "yt-dlp binary is not available" });
   }
 
-  const muxedFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`;
   const fallbackFormat = `bestvideo[height<=${q}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${q}][ext=mp4]/best`;
 
   const trySpawn = (format) =>
