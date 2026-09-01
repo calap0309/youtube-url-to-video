@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ezconverter — YouTube URL → 720p MP4 on Vercel",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/calap0309/youtube-url-to-video",
+      "revision": "f9fa461f4445b424fd7f0145eae70bc6b60f51e2"
+    },
+    "views": [
+      { "id": "primary-path", "label": "Primary 720p path", "focus": ["users", "vercel-edge", "frontend", "api-download", "ytdlp", "youtube"], "note": "Paste URL → preview → 720p MP4 via yt-dlp muxed, stays on vercel.app." },
+      { "id": "fallback-path", "label": "Cobalt fallback", "focus": ["api-download", "cobalt", "youtube"], "note": "When yt-dlp needs ffmpeg or 60s limit, proxy via Cobalt." },
+      { "id": "edge-cache", "label": "Edge + static", "focus": ["vercel-edge", "frontend", "api-health"], "note": "Vercel CDN fronts static, health probes keep warm." }
+    ]
+  },
+  "components": [
+    { "id": "users", "type": "external", "label": "Users", "sublabel": "Browser / Mobile", "pos": [40, 320], "size": [120, 60] },
+    { "id": "vercel-edge", "type": "cloud", "label": "Vercel Edge", "sublabel": "CDN + TLS", "pos": [220, 320], "size": [130, 60], "tag": "iad1 / sin1" },
+    { "id": "frontend", "type": "frontend", "label": "Frontend", "sublabel": "index.html / app.js", "pos": [400, 320], "size": [140, 64], "sources": [{ "path": "index.html", "line": 1 }, { "path": "app.js", "line": 1 }] },
+    { "id": "api-health", "type": "backend", "label": "GET /api/health", "sublabel": "hasYtDlp probe", "pos": [400, 140], "size": [140, 60], "sources": [{ "path": "api/health.js", "line": 1 }] },
+    { "id": "api-info", "type": "backend", "label": "GET /api/info", "sublabel": "yt-dlp dump-json", "pos": [400, 470], "size": [140, 60], "sources": [{ "path": "api/info.js", "line": 1 }] },
+    { "id": "api-download", "type": "backend", "label": "GET /api/download", "sublabel": "720p muxed 302", "pos": [600, 320], "size": [150, 64], "sources": [{ "path": "api/download.js", "line": 1 }], "tag": "302 redirect" },
+    { "id": "ytdlp", "type": "backend", "label": "yt-dlp", "sublabel": "2026.08.19 + node", "pos": [600, 470], "size": [150, 60], "sources": [{ "path": "api/_lib.js", "line": 1 }] },
+    { "id": "youtube", "type": "external", "label": "YouTube", "sublabel": "googlevideo.com", "pos": [820, 320], "size": [130, 60] },
+    { "id": "cobalt", "type": "external", "label": "Cobalt API", "sublabel": "co.wuk.sh fallback", "pos": [820, 470], "size": [130, 60] },
+    { "id": "github", "type": "cloud", "label": "GitHub", "sublabel": "calap0309 repo", "pos": [220, 470], "size": [130, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Vercel: iad1 / sin1 — serverless, maxDuration 60s", "wraps": ["vercel-edge", "frontend", "api-health", "api-info", "api-download", "ytdlp"] },
+    { "kind": "security-group", "label": "CORS: * → /api/*", "wraps": ["api-health", "api-info", "api-download"] }
+  ],
+  "connections": [
+    { "id": "users-to-edge", "from": "users", "to": "vercel-edge", "label": "HTTPS :443", "variant": "emphasis" },
+    { "id": "edge-to-frontend", "from": "vercel-edge", "to": "frontend", "label": "static" },
+    { "id": "frontend-to-health", "from": "frontend", "to": "api-health", "label": "probe", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
+    { "id": "frontend-to-info", "from": "frontend", "to": "api-info", "label": "preview", "fromSide": "bottom", "toSide": "top", "labelAt": [470, 398] },
+    { "id": "frontend-to-download", "from": "frontend", "to": "api-download", "label": "download 720p", "variant": "emphasis", "labelAt": [570, 398] },
+    { "id": "download-to-ytdlp", "from": "api-download", "to": "ytdlp", "label": "--get-url muxed", "fromSide": "bottom", "toSide": "top", "labelAt": [635, 445] },
+    { "id": "info-to-ytdlp", "from": "api-info", "to": "ytdlp", "label": "--dump-json", "variant": "dashed", "fromSide": "right", "toSide": "left" },
+    { "id": "ytdlp-to-youtube", "from": "ytdlp", "to": "youtube", "label": "itag 18/22", "fromSide": "bottom", "toSide": "right", "via": [[675, 590], [970, 590], [970, 350]], "labelAt": [870, 600] },
+    { "id": "download-to-cobalt", "from": "api-download", "to": "cobalt", "label": "fallback tunnel", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "via": [[675, 430], [885, 430]], "labelAt": [780, 440] },
+    { "id": "cobalt-to-youtube", "from": "cobalt", "to": "youtube", "label": "tunnel", "variant": "dashed", "fromSide": "top", "toSide": "bottom", "labelAt": [920, 544] },
+    { "id": "github-to-vercel", "from": "github", "to": "vercel-edge", "label": "git push → deploy", "variant": "dashed", "fromSide": "top", "toSide": "bottom" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Edge", "items": ["Vercel Edge CDN fronts static (index.html/app.js)", "Same domain /api/* — no CORS, 302 to googlevideo stays off-domain but Content-Disposition preserved"] },
+    { "dot": "emerald", "title": "Application", "items": ["Frontend 720p fixed, app.js:127 probes /api/health → ✓ Your server vs Cobalt fallback", "yt-dlp 2026.08.19 with --js-runtimes node — muxed MP4 best[height<=720][ext=mp4] — no ffmpeg needed on Vercel", "60s maxDuration — long videos fallback to Cobalt"] },
+    { "dot": "amber", "title": "Fallback", "items": ["api/download 302 to googlevideo (12M verified) — avoids Vercel streaming empty 200", "api/info 200 + thumbnail fallback, health true"] }
+  ]
+}

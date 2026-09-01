@@ -20,14 +20,20 @@
   const errorBox = $("#errorBox");
   const toastEl = $("#toast");
 
-  // Backend (same domain, VPS) + Cobalt fallback (github.io / when backend down)
-  const BACKEND_BASE = ""; // same origin: /api/* (VPS: https://yourdomain.com/api/*)
-  const COBALT_INSTANCES = [
-    "https://api.cobalt.tools",
-    "https://co.wuk.sh",
+  // Backend (same domain: /api/* on Vercel, Render, VPS, or localhost)
+  const BACKEND_BASE = "";
+  const INVIDIOUS_INSTANCES = [
+    "https://inv.tux.pizza",
+    "https://invidious.nerdvpn.de",
+    "https://invidious.drgns.space",
+    "https://invidious.projectsegfau.lt",
   ];
-  let backendAvailable = null; // null=unknown, true/false cached
+  const COBALT_INSTANCES = [
+    "https://cobalt-api.kwiatekm.tokyo",
+    "https://api.cobalt.tools",
+  ];
 
+  let backendAvailable = null; // null=unknown, true/false cached
   let currentUrl = "";
   let currentTitle = "video";
   let isBusy = false;
@@ -50,12 +56,19 @@
 
   function showError(html) {
     errorBox.innerHTML = html;
+    errorBox.className = "error-box";
+    errorBox.classList.remove("hidden");
+  }
+
+  function showSuccess(html) {
+    errorBox.innerHTML = html;
+    errorBox.className = "success-box";
     errorBox.classList.remove("hidden");
   }
 
   function hideError() {
-    errorBox.classList.add("hidden");
-    errorBox.textContent = "";
+    errorBox.className = "error-box hidden";
+    errorBox.innerHTML = "";
   }
 
   function showProgress(text, pct) {
@@ -85,8 +98,6 @@
     try {
       const parsed = new URL(url);
       const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
-      const path = parsed.pathname;
-      // allow youtube.com, youtu.be, youtube-nocookie.com, music.youtube.com, m.youtube.com
       const validHosts = [
         "youtube.com",
         "youtu.be",
@@ -96,7 +107,6 @@
       ];
       const isHostValid = validHosts.some((h) => host === h || host.endsWith("." + h));
       if (!isHostValid) return false;
-      // Basic path check: watch, shorts, embed, live, youtu.be/<id>
       if (host.includes("youtu.be")) return parsed.pathname.length > 1;
       return true;
     } catch {
@@ -121,7 +131,11 @@
   }
 
   function sanitizeFilename(name) {
-    return name.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80) || "video";
+    return (name || "video")
+      .replace(/[\\/:*?"<>|]/g, "_")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80) || "video";
   }
 
   // --- backend detection ---
@@ -133,7 +147,7 @@
     }
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 2500);
+      const t = setTimeout(() => ctrl.abort(), 3500);
       const resp = await fetch(BACKEND_BASE + "/api/health", { signal: ctrl.signal });
       clearTimeout(t);
       if (!resp.ok) {
@@ -141,13 +155,12 @@
         return false;
       }
       const data = await resp.json().catch(() => ({}));
-      // Vercel has no python3/yt-dlp — treat as not available so we fallback to Cobalt quickly
-      if (data.hasYtDlp === false) {
-        backendAvailable = false;
-        return false;
+      if (data && data.ok) {
+        backendAvailable = true;
+        return true;
       }
-      backendAvailable = true;
-      return true;
+      backendAvailable = false;
+      return false;
     } catch {
       backendAvailable = false;
       return false;
@@ -162,11 +175,11 @@
       ? "https://img.youtube.com/vi/" + videoId + "/hqdefault.jpg"
       : "";
 
-    // 1. Try backend /api/info (VPS) - has real title/thumbnail/duration
+    // 1. Try backend /api/info
     if (await checkBackend()) {
       try {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 8000);
+        const t = setTimeout(() => ctrl.abort(), 10000);
         const resp = await fetch(BACKEND_BASE + "/api/info?url=" + encodeURIComponent(url), { signal: ctrl.signal });
         clearTimeout(t);
         if (resp.ok) {
@@ -178,12 +191,11 @@
           };
         }
       } catch (e) {
-        // fall through to oEmbed
-        console.warn("[preview] backend failed, falling back to oEmbed", e);
+        console.warn("[preview] backend /api/info failed, trying oEmbed fallback", e);
       }
     }
 
-    // 2. Try oEmbed (no key, CORS allowed) - works on github.io
+    // 2. Try YouTube oEmbed (CORS allowed on client side)
     try {
       const oembedUrl = "https://www.youtube.com/oembed?url=" + encodeURIComponent(url) + "&format=json";
       const ctrl = new AbortController();
@@ -199,7 +211,7 @@
         };
       }
     } catch (e) {
-      // ignore, fallback to thumbnail
+      // ignore
     }
 
     if (videoId) {
@@ -214,32 +226,56 @@
 
   function renderPreview(url, info) {
     currentUrl = url;
-    currentTitle = info.title;
+    currentTitle = info.title || "video";
     thumbImg.src = info.thumb;
-    thumbImg.alt = info.title;
-    videoTitle.textContent = info.title;
+    thumbImg.alt = info.title || "thumbnail";
+    videoTitle.textContent = info.title || "YouTube Video";
     videoMeta.textContent = info.author ? "by " + info.author + " · 720p MP4" : "720p MP4 · Ready to download";
     previewCard.classList.remove("hidden");
     setStatus("Ready — tap Download for 720p MP4", "success");
     openBtn.onclick = () => window.open(url, "_blank", "noopener");
-    // scroll into view on mobile
     previewCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
-  // --- Backend download helpers (Option A: always stream on same domain, no googlevideo redirect) ---
+  // --- Invidious fallback extractor ---
+  async function requestInvidious(videoId, instanceBase) {
+    const endpoint = instanceBase.replace(/\/$/, "") + "/api/v1/videos/" + encodeURIComponent(videoId);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 9000);
 
-  async function requestBackendDownload(url) {
-    // Option A: stream muxed 720p via same domain /api/download?stream=1 — stays on vercel.app, no off-domain 302
-    // Do NOT try /api/url (googlevideo) — that was the redirect that showed "another domain" error
-    const streamUrl = BACKEND_BASE + "/api/download?url=" + encodeURIComponent(url) + "&quality=720&stream=1";
-    return { url: streamUrl, filename: sanitizeFilename(currentTitle) + ".mp4", via: "backend-stream" };
+    let resp;
+    try {
+      resp = await fetch(endpoint, {
+        signal: ctrl.signal,
+        headers: { Accept: "application/json" },
+      });
+    } finally {
+      clearTimeout(t);
+    }
+
+    if (!resp.ok) throw new Error("Invidious error: " + resp.status);
+    const data = await resp.json();
+    const streams = Array.isArray(data.formatStreams) ? data.formatStreams : [];
+    if (!streams.length) throw new Error("No format streams available");
+
+    // Prefer 720p mp4, then any 720p, then highest resolution mp4
+    const stream720 = streams.find((s) => (s.qualityLabel || s.quality || "").includes("720") && (s.container === "mp4" || (s.type || "").includes("mp4")))
+      || streams.find((s) => (s.qualityLabel || s.quality || "").includes("720"))
+      || streams.find((s) => s.container === "mp4" || (s.type || "").includes("mp4"))
+      || streams[0];
+
+    if (stream720 && stream720.url) {
+      return {
+        url: stream720.url,
+        filename: sanitizeFilename(data.title || currentTitle) + ".mp4",
+      };
+    }
+    throw new Error("No compatible MP4 stream found");
   }
 
-  // --- Cobalt download ---
-
+  // --- Cobalt fallback extractor ---
   async function requestCobalt(url, instanceBase) {
     const endpoint = instanceBase.replace(/\/$/, "") + "/";
-    // Cobalt API 10+ uses JSON with url + videoQuality
     const payload = {
       url: url,
       videoQuality: "720",
@@ -248,7 +284,7 @@
     };
 
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 20000);
+    const t = setTimeout(() => ctrl.abort(), 12000);
 
     let resp;
     try {
@@ -267,75 +303,45 @@
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      throw new Error("Extractor " + resp.status + (text ? ": " + text.slice(0, 120) : ""));
+      throw new Error("Extractor " + resp.status + (text ? ": " + text.slice(0, 100) : ""));
     }
 
     const data = await resp.json();
-    // Cobalt statuses: redirect, tunnel, picker, error
     if (data.status === "error") {
       const msg = (data.error && data.error.code) ? data.error.code : JSON.stringify(data.error || data);
-      throw new Error(mapCobaltError(msg));
+      throw new Error(msg);
     }
     if (data.status === "redirect" || data.status === "tunnel") {
       if (!data.url) throw new Error("Extractor returned no URL");
       return { url: data.url, filename: data.filename || sanitizeFilename(currentTitle) + ".mp4" };
     }
     if (data.status === "picker") {
-      // picker = multiple items, pick 720p mp4 if available
       const items = Array.isArray(data.picker) ? data.picker : [];
       const best = items.find((it) => it.type === "video" && String(it.url).includes("720"))
         || items.find((it) => it.type === "video")
         || items[0];
       if (best && best.url) return { url: best.url, filename: sanitizeFilename(currentTitle) + ".mp4" };
-      throw new Error("No downloadable format found (picker empty)");
+      throw new Error("No format found in picker");
     }
-    throw new Error("Unexpected extractor response: " + (data.status || "unknown"));
-  }
-
-  function mapCobaltError(code) {
-    const map = {
-      "error.api.youtube.noVideoInfo": "YouTube blocked extractor — try again in a minute",
-      "error.api.youtube.loginRequired": "This video requires login / age verification and can't be downloaded here",
-      "error.api.youtube.privateVideo": "Private video — can't download",
-      "error.api.youtube.premiumVideo": "YouTube Premium-only video",
-      "error.api.link.unsupported": "Link not supported — use a standard youtube.com/watch or youtu.be URL",
-      "error.api.youtube.regionBlocked": "Video blocked in extractor region",
-    };
-    const key = String(code).toLowerCase();
-    for (const k in map) {
-      if (key.includes(k.toLowerCase()) || key.includes(k.split(".").pop())) return map[k];
-    }
-    // generic
-    if (key.includes("rate")) return "Extractor rate-limited — wait 30s and retry";
-    return "Extractor error: " + code;
+    throw new Error("Unexpected response from extractor");
   }
 
   async function triggerDownload(directUrl, filename) {
-    // Try blob fetch for true download attribute (works on desktop + Android)
-    // Fallback to window.open for iOS where blob may OOM on large files
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    if (!isIOS) {
-      try {
-        showProgress("Downloading…", 60);
-        setStatus("Starting download…");
-        // Use anchor with href directly - let browser handle streaming
-        // We do NOT fetch blob for large videos (can be 100MB+)
-        const a = document.createElement("a");
-        a.href = directUrl;
-        a.download = filename;
-        a.rel = "noopener";
-        a.style.display = "none";
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => { if (a.parentNode) a.parentNode.removeChild(a); }, 1000);
-        return true;
-      } catch (e) {
-        // fallback to open
-      }
+    try {
+      const a = document.createElement("a");
+      a.href = directUrl;
+      a.download = filename;
+      a.rel = "noopener";
+      a.target = "_blank";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { if (a.parentNode) a.parentNode.removeChild(a); }, 1000);
+      return true;
+    } catch (e) {
+      window.open(directUrl, "_blank", "noopener");
+      return true;
     }
-    // iOS / fallback: open in new tab (user can long-press -> Save Video)
-    window.open(directUrl, "_blank", "noopener");
-    return true;
   }
 
   async function handleDownload() {
@@ -352,78 +358,107 @@
     showProgress("Contacting extractor (720p)…", 20);
     setStatus("Requesting 720p MP4…");
 
-    // 1. Try backend first (VPS, single domain) - preferred when available
-    if (await checkBackend()) {
+    const filename = sanitizeFilename(currentTitle) + ".mp4";
+
+    // 1. Try backend first (Vercel, Render, VPS, Localhost)
+    const isBackend = await checkBackend();
+    if (isBackend) {
       try {
-        showProgress("Using your server (720p)…", 40);
-        const result = await requestBackendDownload(currentUrl);
-        showProgress("Got link — starting download…", 90);
-        setStatus("Got link — downloading…", "success");
-        await triggerDownload(result.url, result.filename);
+        showProgress("Preparing download link…", 50);
+        const downloadUrl = BACKEND_BASE + "/api/download?url=" + encodeURIComponent(currentUrl) + "&quality=720&title=" + encodeURIComponent(currentTitle);
+
+        showProgress("Starting download…", 90);
+        setStatus("Download ready — starting…", "success");
+
+        await triggerDownload(downloadUrl, filename);
+
         showProgress("Done", 100);
-        setStatus("Download started via backend: " + result.filename, "success");
+        setStatus("Download started: " + filename, "success");
         showToast("Download started — check your downloads folder", "success");
-        showError(
-          'Via your domain (' + result.via + '). If download didn’t start, <a href="' + result.url + '" target="_blank" rel="noopener">tap here to open direct link</a>.'
+
+        showSuccess(
+          'Download initiated! If it did not start automatically, <a href="' + downloadUrl + '" target="_blank" rel="noopener" download="' + filename + '">tap here to download directly</a>.'
         );
-        errorBox.classList.remove("hidden");
-        errorBox.style.background = "#1a2e1a";
-        errorBox.style.borderColor = "#2e7d5b";
-        errorBox.style.color = "#bff5dd";
+
         hideProgress();
         isBusy = false;
         downloadBtn.disabled = false;
         convertBtn.disabled = false;
         return;
       } catch (e) {
-        console.warn("[download] backend failed, falling back to Cobalt", e);
-        setStatus("Backend failed, trying Cobalt…", "error");
-        await new Promise((r) => setTimeout(r, 300));
-        // fall through to Cobalt
+        console.warn("[download] backend request failed, trying fallback extractors...", e);
+        setStatus("Trying fallback extractors…", "error");
+        await new Promise((r) => setTimeout(r, 200));
       }
     }
 
-    // 2. Fallback: Cobalt (github.io / backend down)
-    let lastErr = null;
-    for (let i = 0; i < COBALT_INSTANCES.length; i++) {
-      const inst = COBALT_INSTANCES[i];
-      try {
-        showProgress("Trying " + inst.replace("https://", "") + "…", 30 + i * 20);
-        const result = await requestCobalt(currentUrl, inst);
-        showProgress("Got link — starting download…", 90);
-        setStatus("Got link — downloading…", "success");
-        await triggerDownload(result.url, result.filename);
-        showProgress("Done", 100);
-        setStatus("Download started: " + result.filename, "success");
-        showToast("Download started — check your downloads folder", "success");
-        // Also show direct link fallback
-        showError(
-          'If download didn’t start, <a href="' + result.url + '" target="_blank" rel="noopener">tap here to open direct link</a>. ' +
-          'On iPhone: long-press → Download Linked File.'
-        );
-        errorBox.classList.remove("hidden");
-        errorBox.style.background = "#1a2e1a";
-        errorBox.style.borderColor = "#2e7d5b";
-        errorBox.style.color = "#bff5dd";
-        break;
-      } catch (e) {
-        lastErr = e;
-        const isAbort = e.name === "AbortError";
-        const msg = isAbort ? "Extractor timed out — check connection" : (e.message || "Extractor failed");
-        setStatus(msg, "error");
-        // Don't retry on login/private errors
-        if (/login|private|premium/i.test(msg)) break;
-        if (i === COBALT_INSTANCES.length - 1) {
-          showError(
-            msg + '<br><br>Try:<br>• Check URL is public (not private/live)<br>• Disable ad-block / Private Relay<br>• Wait 30s and retry<br>• Try another video like <code>https://www.youtube.com/watch?v=dQw4w9WgXcQ</code>'
-          );
-          showToast(msg, "error");
-        } else {
-          // try next instance
-          await new Promise((r) => setTimeout(r, 400));
-          continue;
+    // 2. Fallback: Public Invidious & Cobalt instances
+    const videoId = extractVideoId(currentUrl);
+    let downloadSuccess = false;
+
+    // A. Invidious format streams
+    if (videoId) {
+      for (let i = 0; i < INVIDIOUS_INSTANCES.length; i++) {
+        const inst = INVIDIOUS_INSTANCES[i];
+        try {
+          showProgress("Checking " + new URL(inst).hostname + "…", 40 + i * 10);
+          const result = await requestInvidious(videoId, inst);
+          if (result && result.url) {
+            showProgress("Starting download…", 90);
+            setStatus("Got link — downloading…", "success");
+            await triggerDownload(result.url, result.filename);
+            showProgress("Done", 100);
+            setStatus("Download started: " + result.filename, "success");
+            showToast("Download started — check your downloads", "success");
+            showSuccess(
+              'Download started via stream. If needed, <a href="' + result.url + '" target="_blank" rel="noopener" download="' + result.filename + '">tap here to download directly</a>.'
+            );
+            downloadSuccess = true;
+            break;
+          }
+        } catch (e) {
+          console.warn("[invidious]", inst, e.message);
         }
       }
+    }
+
+    // B. Cobalt instances
+    if (!downloadSuccess) {
+      for (let i = 0; i < COBALT_INSTANCES.length; i++) {
+        const inst = COBALT_INSTANCES[i];
+        try {
+          showProgress("Trying " + inst.replace("https://", "") + "…", 70 + i * 10);
+          const result = await requestCobalt(currentUrl, inst);
+          if (result && result.url) {
+            showProgress("Starting download…", 90);
+            setStatus("Got link — downloading…", "success");
+            await triggerDownload(result.url, result.filename);
+            showProgress("Done", 100);
+            setStatus("Download started: " + result.filename, "success");
+            showToast("Download started — check downloads folder", "success");
+            showSuccess(
+              'Download ready! <a href="' + result.url + '" target="_blank" rel="noopener">Tap here to open direct link</a>.'
+            );
+            downloadSuccess = true;
+            break;
+          }
+        } catch (e) {
+          console.warn("[cobalt]", inst, e.message);
+        }
+      }
+    }
+
+    if (!downloadSuccess) {
+      const cleanMsg = "Could not extract direct stream for this video.";
+      setStatus(cleanMsg, "error");
+      showError(
+        cleanMsg + '<br><br>' +
+        '<strong>Troubleshooting:</strong><br>' +
+        '• Check if the video is public (not private, age-restricted, or members-only)<br>' +
+        '• If deployed on Vercel/Render, ensure your server functions are running<br>' +
+        '• Try opening on YouTube: <a href="' + currentUrl + '" target="_blank" rel="noopener">Watch Video</a>'
+      );
+      showToast("Download extractor failed", "error");
     }
 
     hideProgress();
@@ -441,15 +476,12 @@
     }
     const url = normalizeUrl(raw);
     if (!isYouTubeUrl(url)) {
-      showError('Not a YouTube URL. Use <code>youtube.com/watch?v=ID</code> or <code>youtu.be/ID</code> or <code>youtube.com/shorts/ID</code>');
+      showError("Not a YouTube URL. Use <code>youtube.com/watch?v=ID</code> or <code>youtu.be/ID</code> or <code>youtube.com/shorts/ID</code>");
       showToast("Invalid YouTube URL", "error");
       return;
     }
 
     hideError();
-    errorBox.style.background = "";
-    errorBox.style.borderColor = "";
-    errorBox.style.color = "";
     previewCard.classList.add("hidden");
     setStatus("Loading preview…");
     showProgress("Fetching video info…", 40);
@@ -463,16 +495,17 @@
       showToast("Preview ready — tap Download", "success");
     } catch (e) {
       const msg = e.message || "Could not load preview";
-      showError(msg + '<br>Thumb fallback: <code>https://img.youtube.com/vi/' + (extractVideoId(url) || "ID") + '/hqdefault.jpg</code>');
+      const vid = extractVideoId(url);
+      showError(msg + (vid ? '<br>Thumb fallback: <code>https://img.youtube.com/vi/' + vid + '/hqdefault.jpg</code>' : ""));
       showToast(msg, "error");
-      // Still allow download even if preview fails
+      // Still allow download attempt even if preview failed
       currentUrl = url;
-      currentTitle = "video-" + (extractVideoId(url) || Date.now());
-      thumbImg.src = extractVideoId(url) ? "https://img.youtube.com/vi/" + extractVideoId(url) + "/hqdefault.jpg" : "";
+      currentTitle = "video-" + (vid || Date.now());
+      thumbImg.src = vid ? "https://img.youtube.com/vi/" + vid + "/hqdefault.jpg" : "";
       videoTitle.textContent = currentTitle;
-      videoMeta.textContent = "720p MP4 · Preview failed but download may still work";
+      videoMeta.textContent = "720p MP4 · Ready to download";
       previewCard.classList.remove("hidden");
-      setStatus("Preview failed — you can still try download", "error");
+      setStatus("Preview fallback loaded — tap Download", "success");
       hideProgress();
     } finally {
       convertBtn.disabled = false;
@@ -485,9 +518,6 @@
   urlInput.addEventListener("input", () => {
     toggleClearBtn();
     hideError();
-    errorBox.style.background = "";
-    errorBox.style.borderColor = "";
-    errorBox.style.color = "";
   });
 
   urlInput.addEventListener("keydown", (e) => {
@@ -511,7 +541,6 @@
         handlePreview();
       }
     } catch {
-      // Fallback: focus input for manual paste (iOS may block readText)
       urlInput.focus();
       showToast("Paste with Ctrl+V / long-press → Paste", "error");
     }
@@ -542,23 +571,23 @@
     }
   })();
 
-  // Backend badge + expose
+  // Backend badge
   (function updateBackendBadge() {
     const badge = document.getElementById("backendBadge");
     if (!badge) return;
     checkBackend().then((ok) => {
       if (ok) {
-        badge.textContent = "✓ Your server";
+        badge.textContent = "✓ Server ready";
         badge.className = "badge badge-accent";
-        badge.title = "Backend /api reachable on this domain";
+        badge.title = "Backend API connected";
       } else {
-        badge.textContent = "Cobalt fallback";
+        badge.textContent = "Direct fallback";
         badge.className = "badge";
-        badge.title = "Backend not found — using Cobalt API (github.io mode)";
+        badge.title = "Client fallback mode";
       }
     });
   })();
 
-  // expose for tests / console
   window.__ytv = { isYouTubeUrl, extractVideoId, normalizeUrl, sanitizeFilename, checkBackend };
 })();
+

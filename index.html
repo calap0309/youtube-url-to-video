@@ -58,12 +58,10 @@
     <details class="help-details">
       <summary>How does 720p download work?</summary>
       <p>
-        <strong>With your domain (VPS):</strong> <code>yourdomain.com</code> runs Node + <code>yt-dlp</code> + <code>ffmpeg</code>.
-        The browser calls <code>/api/info</code> and <code>/api/download?quality=720</code> on the same domain — single domain, no CORS.
+        <strong>Backend server (Vercel / Render / VPS):</strong>
+        The browser requests <code>/api/download?quality=720</code> on the same origin. The backend resolves the direct high-speed MP4 stream directly to your browser for fast downloading without quality loss.
         <br><br>
-        <strong>Fallback (GitHub Pages):</strong> if the backend is unreachable, the app calls the open-source
-        <a href="https://github.com/imput/cobalt" target="_blank" rel="noopener">Cobalt API</a>
-        (<code>api.cobalt.tools</code>) directly from your browser. For personal use only — respect YouTube's Terms and copyright.
+        <strong>Direct client fallback:</strong> if the backend is unreachable or in static hosting mode, the app uses open-source stream extractors directly from your browser.
       </p>
     </details>
   </main>
@@ -71,10 +69,11 @@
   <footer class="app-footer">
     <p>For personal/educational use. Respect creators &amp; YouTube ToS.</p>
     <p class="footer-links">
-      <a href="https://github.com/imput/cobalt" target="_blank" rel="noopener">Cobalt API</a> ·
+      <span>720p MP4 Fast Downloader</span> ·
       <a href="#" id="howLink">Privacy: no URL stored</a>
     </p>
   </footer>
+
 
   <div id="toast" class="toast hidden"></div>
 

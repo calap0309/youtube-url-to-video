@@ -262,6 +262,24 @@ a:hover {
   text-decoration: underline;
 }
 
+.success-box {
+  background: #1a2e1a;
+  border: 1px solid #2e7d5b;
+  color: #bff5dd;
+  padding: 14px 16px;
+  border-radius: 12px;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.success-box a {
+  color: #7bffb0;
+  text-decoration: underline;
+  font-weight: 600;
+}
+
+
 .help-details {
   background: #1e1e3a;
   border: 1px solid #31355e;

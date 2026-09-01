@@ -8,6 +8,18 @@ module.exports = async (req, res) => {
   if (!url) return res.status(400).json({ error: "Missing ?url=" });
   if (!isYouTubeUrl(url)) return res.status(400).json({ error: "Not a YouTube URL" });
 
+  let vid = "";
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) {
+      vid = u.pathname.split("/")[1]?.split("?")[0]?.split("&")[0] || "";
+    } else {
+      vid = u.searchParams.get("v") || u.pathname.match(/\/(shorts|embed|live)\/([^/?&]+)/)?.[2] || "";
+    }
+  } catch {}
+
+  const thumbFallback = vid ? `https://img.youtube.com/vi/${vid}/hqdefault.jpg` : "";
+
   try {
     const { stdout } = await runYtDlp([
       "--dump-single-json",
@@ -24,35 +36,49 @@ module.exports = async (req, res) => {
     } else {
       thumb = data.thumbnail || "";
     }
-    if (!thumb && data.id) thumb = `https://img.youtube.com/vi/${data.id}/hqdefault.jpg`;
-    res.json({
-      id: data.id,
+    if (!thumb && (data.id || vid)) thumb = `https://img.youtube.com/vi/${data.id || vid}/hqdefault.jpg`;
+    return res.json({
+      id: data.id || vid,
       title: data.title || "YouTube Video",
       author: data.uploader || data.channel || "",
       duration: data.duration || null,
-      thumbnail: thumb,
+      thumbnail: thumb || thumbFallback,
       url,
       formats: (data.formats || []).slice(0, 5).map((f) => ({
         height: f.height, ext: f.ext, vcodec: f.vcodec, acodec: f.acodec, format_id: f.format_id,
       })),
     });
   } catch (e) {
-    console.error("[/api/info] error", e);
-    const msg = (e.stderr || e.message || "yt-dlp failed").toString().slice(0, 800);
-    if (/Private video/i.test(msg)) return res.status(403).json({ error: "Private video" });
-    if (/Sign in/i.test(msg) || /login/i.test(msg)) return res.status(403).json({ error: "Video requires login / age verification" });
-    if (/Video unavailable/i.test(msg)) return res.status(404).json({ error: "Video unavailable" });
-    // Vercel serverless has no python3/yt-dlp — don't 500, let frontend fallback to oEmbed/thumbnail + Cobalt
-    if (/python3|not found|ENOENT|No such file/i.test(msg)) {
-      // Return 503 so frontend knows to fallback gracefully, with thumbnail fallback data
-      let fallbackThumb = "";
-      try {
-        const idMatch = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&\/]+)/);
-        const vid = idMatch ? idMatch[1] : "";
-        if (vid) fallbackThumb = `https://img.youtube.com/vi/${vid}/hqdefault.jpg`;
-      } catch {}
-      return res.status(503).json({ error: "Backend extractor not available on Vercel (use Cobalt fallback)", fallbackThumb, useFallback: true });
+    console.warn("[/api/info] yt-dlp info failed, attempting oEmbed fallback:", e.message || e);
+    // Fallback: try YouTube oEmbed to get title and author
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+      const resp = await fetch(oembedUrl);
+      if (resp.ok) {
+        const odata = await resp.json();
+        return res.json({
+          id: vid,
+          title: odata.title || "YouTube Video",
+          author: odata.author_name || "",
+          thumbnail: odata.thumbnail_url || thumbFallback,
+          url,
+          fallback: true,
+        });
+      }
+    } catch {}
+
+    if (vid) {
+      return res.json({
+        id: vid,
+        title: `YouTube Video (${vid})`,
+        author: "",
+        thumbnail: thumbFallback,
+        url,
+        fallback: true,
+      });
     }
-    return res.status(500).json({ error: msg });
+
+    return res.status(500).json({ error: (e.stderr || e.message || "Failed to get video info").toString().slice(0, 500) });
   }
 };
+
