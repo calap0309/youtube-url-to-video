@@ -7,9 +7,16 @@ const https = require("https");
 const TMP_BIN = "/tmp/yt-dlp";
 let cachedBin = null;
 
+function normalizeUrl(raw) {
+  let u = (raw || "").toString().trim();
+  if (!u) return "";
+  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+  return u;
+}
+
 function isYouTubeUrl(url) {
   try {
-    const u = new URL(url);
+    const u = new URL(normalizeUrl(url));
     const host = u.hostname.replace(/^www\./, "").toLowerCase();
     const valid = ["youtube.com", "youtu.be", "youtube-nocookie.com", "m.youtube.com", "music.youtube.com"];
     return valid.some((h) => host === h || host.endsWith("." + h));
@@ -20,11 +27,12 @@ function isYouTubeUrl(url) {
 
 function sanitizeFilename(name) {
   return (name || "video")
-    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/[\\/:*?"<>|\r\n\t]/g, "_")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80) || "video";
 }
+
 
 function getBinVersion(binPath) {
   try {
@@ -196,6 +204,7 @@ function setCors(res) {
 
 module.exports = {
   isYouTubeUrl,
+  normalizeUrl,
   sanitizeFilename,
   runYtDlp,
   ensureYtDlp,
@@ -203,4 +212,5 @@ module.exports = {
   ytDlpAvailable,
   setCors,
 };
+
 

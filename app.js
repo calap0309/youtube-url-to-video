@@ -372,33 +372,53 @@
     const filename = sanitizeFilename(currentTitle) + ".mp4";
     let downloadSuccess = false;
 
-    // 1. Try backend /api/url (Vercel, Render, VPS, Localhost)
+    // 1. Try backend /api/download (Vercel proxy stays on same domain, no 0-byte cross-origin issue)
     const isBackend = await checkBackend();
     if (isBackend) {
       try {
         showProgress("Resolving stream from server…", 40);
-        const apiUrl = BACKEND_BASE + "/api/url?url=" + encodeURIComponent(currentUrl) + "&quality=720";
+        // Use backend proxy that stays on youtube-url-to-video.vercel.app with attachment header
+        const backendDownloadUrl = BACKEND_BASE + "/api/download?url=" + encodeURIComponent(currentUrl) + "&quality=720";
+        // Quick health check: try HEAD to see if backend can proxy (avoid 0-byte)
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 15000);
-        const resp = await fetch(apiUrl, { signal: ctrl.signal }).catch(() => null);
+        const t = setTimeout(() => ctrl.abort(), 8000);
+        const headResp = await fetch(backendDownloadUrl, { method: "HEAD", signal: ctrl.signal }).catch(() => null);
         clearTimeout(t);
-
+        if (headResp && headResp.ok) {
+          showProgress("Starting download…", 90);
+          setStatus("Download ready — starting…", "success");
+          await triggerDownload(backendDownloadUrl, filename);
+          showProgress("Done", 100);
+          setStatus("Download started: " + filename, "success");
+          showToast("Download started — check your downloads folder", "success");
+          showSuccess(
+            'Download started via server! If it did not start, <a href="' + backendDownloadUrl + '" target="_blank" rel="noopener" download="' + filename + '">click here to download directly</a>.'
+          );
+          downloadSuccess = true;
+          hideProgress();
+          isBusy = false;
+          downloadBtn.disabled = false;
+          convertBtn.disabled = false;
+          return;
+        }
+        // If HEAD failed, fall back to /api/url direct googlevideo (old path) as secondary
+        const apiUrl = BACKEND_BASE + "/api/url?url=" + encodeURIComponent(currentUrl) + "&quality=720";
+        const ctrl2 = new AbortController();
+        const t2 = setTimeout(() => ctrl2.abort(), 10000);
+        const resp = await fetch(apiUrl, { signal: ctrl2.signal }).catch(() => null);
+        clearTimeout(t2);
         if (resp && resp.ok) {
           const data = await resp.json().catch(() => null);
-          if (data && data.ok && data.url) {
+          if (data && data.url) {
             showProgress("Starting download…", 90);
             setStatus("Download ready — starting…", "success");
-
             await triggerDownload(data.url, filename);
-
             showProgress("Done", 100);
             setStatus("Download started: " + filename, "success");
             showToast("Download started — check your downloads folder", "success");
-
             showSuccess(
               'Download started! If it did not start automatically, <a href="' + data.url + '" target="_blank" rel="noopener" download="' + filename + '">click here to download directly</a>.'
             );
-
             downloadSuccess = true;
             hideProgress();
             isBusy = false;
@@ -408,7 +428,7 @@
           }
         }
       } catch (e) {
-        console.warn("[download] backend direct URL extraction failed:", e);
+        console.warn("[download] backend proxy failed:", e);
       }
     }
 

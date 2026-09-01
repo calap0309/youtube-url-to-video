@@ -32,12 +32,11 @@ module.exports = async (req, res) => {
     } catch (_) {}
   }
 
-  // 1. On Vercel / serverless or by default, 302 redirect directly to GoogleVideo stream
-  // This avoids serverless execution limits / timeouts and provides instant high-speed download
+  // 1. On Vercel, proxy muxed MP4 through same domain (no 302) to fix 0-byte download
+  // 302 to googlevideo loses Content-Disposition and download attribute cross-origin -> 0 byte
+  // So fetch direct URL server-side and pipe bytes through Vercel with attachment header
   const isVercel = !!process.env.VERCEL;
-  const wantStream = req.query.stream === "1" || req.query.stream === "true";
-
-  if (isVercel || !wantStream) {
+  if (isVercel) {
     try {
       const muxedFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`;
       const { stdout } = await runYtDlp([
@@ -52,15 +51,27 @@ module.exports = async (req, res) => {
         if (req.query.json === "1" || req.headers.accept?.includes("application/json")) {
           return res.json({ ok: true, url: direct, filename });
         }
-        res.writeHead(302, {
-          Location: direct,
+        // Proxy bytes so download stays on youtube-url-to-video.vercel.app with correct filename, not 0 byte
+        const upstream = await fetch(direct);
+        if (!upstream.ok || !upstream.body) throw new Error(`upstream ${upstream.status}`);
+        res.writeHead(200, {
+          "Content-Type": "video/mp4",
           "Content-Disposition": `attachment; filename="${filename.replace(/"/g, "")}"`,
+          "Cache-Control": "no-cache",
           "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "Content-Disposition",
         });
+        const reader = upstream.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
         return res.end();
       }
     } catch (e) {
-      console.warn("[download] direct url extraction failed, trying stream:", e.message);
+      console.warn("[download] Vercel proxy failed, falling back to stream:", e.message);
+      // fall through to stream fallback below
     }
   }
 
