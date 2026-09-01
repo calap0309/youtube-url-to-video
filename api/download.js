@@ -32,7 +32,6 @@ module.exports = async (req, res) => {
     } catch (_) {}
   }
 
-  // 1. Vercel: handle json=1 and proxy with most permissive format to avoid 0-byte
   const wantJson = req.query.json === "1" || req.headers.accept?.includes("application/json");
   const muxedFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`;
   const permissiveFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best/best`;
@@ -41,6 +40,17 @@ module.exports = async (req, res) => {
     const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",fmt,url]);
     return stdout.trim().split("\n")[0];
   };
+  // HEAD: just check if direct URL exists, return 200/500 so frontend knows to fallback to Invidious/Cobalt
+  if (req.method === "HEAD") {
+    try {
+      let direct = "";
+      for (const fmt of [muxedFormat, permissiveFormat, ultimateFormat]) {
+        try { direct = await tryGetUrl(fmt); if (direct && direct.startsWith("http")) break; } catch {}
+      }
+      if (direct && direct.startsWith("http")) return res.status(200).end();
+      return res.status(500).end();
+    } catch { return res.status(500).end(); }
+  }
   if (wantJson) {
     try {
       let direct = "";
@@ -53,7 +63,24 @@ module.exports = async (req, res) => {
         }
       }
       if (direct && direct.startsWith("http")) return res.json({ ok: true, url: direct, filename });
-      return res.status(500).json({ ok: false, error: "No direct URL found (tried muxed/permissive/best)" });
+      // Fallback to Invidious on Vercel when yt-dlp get-url fails (YouTube bot detection)
+      if (process.env.VERCEL) {
+        const videoId = (url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&\/]+)/) || [])[1];
+        if (videoId) {
+          const invInstances = ["https://inv.tux.pizza","https://invidious.nerdvpn.de","https://invidious.drgns.space"];
+          for (const inv of invInstances) {
+            try {
+              const r = await fetch(`${inv}/api/v1/videos/${videoId}`, { signal: AbortSignal.timeout(8000) });
+              if (!r.ok) continue;
+              const j = await r.json();
+              const streams = j.formatStreams || [];
+              const s = streams.find(x => (x.qualityLabel||"").includes("720") && (x.container==="mp4"||x.type?.includes("mp4"))) || streams.find(x=>x.container==="mp4") || streams[0];
+              if (s && s.url) return res.json({ ok: true, url: s.url, filename });
+            } catch {}
+          }
+        }
+      }
+      return res.status(500).json({ ok: false, error: "No direct URL found (tried muxed/permissive/best + Invidious)" });
     } catch (e) {
       const msg = (e.stderr || e.message || "failed").toString().slice(0, 600);
       return res.status(500).json({ ok: false, error: msg });
@@ -68,6 +95,23 @@ module.exports = async (req, res) => {
           direct = await tryGetUrl(fmt);
           if (direct && direct.startsWith("http")) break;
         } catch {}
+      }
+      if (!direct || !direct.startsWith("http")) {
+        // Try Invidious as Vercel fallback
+        const videoId = (url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&\/]+)/) || [])[1];
+        if (videoId) {
+          for (const inv of ["https://inv.tux.pizza","https://invidious.nerdvpn.de"]) {
+            try {
+              const r = await fetch(`${inv}/api/v1/videos/${videoId}`, { signal: AbortSignal.timeout(8000) });
+              if (!r.ok) continue;
+              const j = await r.json();
+              const streams = j.formatStreams || [];
+              const s = streams.find(x => (x.qualityLabel||"").includes("720") && x.container==="mp4") || streams.find(x=>x.container==="mp4") || streams[0];
+              if (s && s.url) direct = s.url;
+              if (direct) break;
+            } catch {}
+          }
+        }
       }
       if (direct && direct.startsWith("http")) {
         const upstream = await fetch(direct);
