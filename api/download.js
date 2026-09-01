@@ -36,22 +36,24 @@ module.exports = async (req, res) => {
   const wantJson = req.query.json === "1" || req.headers.accept?.includes("application/json");
   const muxedFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best`;
   const permissiveFormat = `best[height<=${q}][ext=mp4]/best[height<=${q}]/best/best`;
+  const ultimateFormat = `best`;
+  const tryGetUrl = async (fmt) => {
+    const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",fmt,url]);
+    return stdout.trim().split("\n")[0];
+  };
   if (wantJson) {
     try {
-      // Try muxed first, then permissive best
       let direct = "";
-      try {
-        const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",muxedFormat,url]);
-        direct = stdout.trim().split("\n")[0];
-      } catch (e) {
-        console.warn("[download] muxed get-url failed, trying permissive", e.message);
-      }
-      if (!direct || !direct.startsWith("http")) {
-        const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",permissiveFormat,url]);
-        direct = stdout.trim().split("\n")[0];
+      for (const fmt of [muxedFormat, permissiveFormat, ultimateFormat]) {
+        try {
+          direct = await tryGetUrl(fmt);
+          if (direct && direct.startsWith("http")) break;
+        } catch (e) {
+          console.warn(`[download] json get-url ${fmt} failed`, e.message?.slice(0,200));
+        }
       }
       if (direct && direct.startsWith("http")) return res.json({ ok: true, url: direct, filename });
-      return res.status(500).json({ ok: false, error: "No direct URL found (format not available)" });
+      return res.status(500).json({ ok: false, error: "No direct URL found (tried muxed/permissive/best)" });
     } catch (e) {
       const msg = (e.stderr || e.message || "failed").toString().slice(0, 600);
       return res.status(500).json({ ok: false, error: msg });
@@ -61,13 +63,11 @@ module.exports = async (req, res) => {
   if (isVercel) {
     try {
       let direct = "";
-      try {
-        const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",muxedFormat,url]);
-        direct = stdout.trim().split("\n")[0];
-      } catch {}
-      if (!direct || !direct.startsWith("http")) {
-        const { stdout } = await runYtDlp(["--get-url","--no-warnings","--no-check-certificates","-f",permissiveFormat,url]);
-        direct = stdout.trim().split("\n")[0];
+      for (const fmt of [muxedFormat, permissiveFormat, ultimateFormat]) {
+        try {
+          direct = await tryGetUrl(fmt);
+          if (direct && direct.startsWith("http")) break;
+        } catch {}
       }
       if (direct && direct.startsWith("http")) {
         const upstream = await fetch(direct);
